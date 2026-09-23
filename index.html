@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clasificador de Residuos</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 20px; background-color: #f4f4f9; }
+        button { padding: 12px 20px; margin: 10px; font-size: 16px; cursor: pointer; border-radius: 5px; border: none; background-color: #007bff; color: white; }
+        button:hover { background-color: #0056b3; }
+        #webcam-container { margin: 20px auto; }
+        #label-container { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 15px; }
+        .class-label { font-size: 18px; font-weight: bold; background: #ffffff; padding: 8px 15px; border-radius: 6px; width: 280px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body>
+
+    <h2>Clasificador de Residuos</h2>
+    
+    <button type="button" onclick="init()">1. Iniciar Cámara</button>
+    <button type="button" onclick="connectMicrobit()">2. Conectar micro:bit</button>
+
+    <div id="webcam-container"></div>
+    <div id="label-container"></div>
+
+    <!-- Librerías de TensorFlow.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+
+    <script type="text/javascript">
+        
+        const URL = "https://teachablemachine.withgoogle.com/models/mzzCVcHcD/";
+
+        let model, webcam, labelContainer, maxPredictions;
+        let port, writer;
+        let isWaiting = false;
+
+        async function connectMicrobit() {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+                const textEncoder = new TextEncoderStream();
+                const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+                writer = textEncoder.writable.getWriter();
+                alert("¡micro:bit conectada correctamente!");
+            } catch (error) {
+                console.error("Error al conectar la micro:bit:", error);
+                alert("No se pudo conectar a la micro:bit.");
+            }
+        }
+
+        async function init() {
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            try {
+                // Cargar modelo y metadatos
+                model = await tmImage.load(modelURL, metadataURL);
+                maxPredictions = model.getTotalClasses();
+
+                console.log("Número de clases detectadas en el modelo: " + maxPredictions);
+
+                // Configurar Cámara
+                const flip = true;
+                webcam = new tmImage.Webcam(250, 250, flip);
+                await webcam.setup();
+                await webcam.play();
+                window.requestAnimationFrame(loop);
+
+                // Insertar video en la pantalla
+                document.getElementById("webcam-container").innerHTML = "";
+                document.getElementById("webcam-container").appendChild(webcam.canvas);
+
+                // Crear dinámicamente una casilla para CADA UNA de las clases del modelo
+                labelContainer = document.getElementById("label-container");
+                labelContainer.innerHTML = ""; 
+                for (let i = 0; i < maxPredictions; i++) {
+                    const div = document.createElement("div");
+                    div.className = "class-label";
+                    labelContainer.appendChild(div);
+                }
+            } catch (e) {
+                alert("Error al cargar el modelo. Verifica que la URL contenga el modelo re-exportado.");
+                console.error(e);
+            }
+        }
+
+        async function loop() {
+            webcam.update();
+            await predict();
+            window.requestAnimationFrame(loop);
+        }
+
+        async function predict() {
+            const prediction = await model.predict(webcam.canvas);
+            let highestProbability = 0;
+            let bestClass = "";
+
+            // Actualizar la interfaz en tiempo real para las 4 clases
+            for (let i = 0; i < maxPredictions; i++) {
+                const prob = prediction[i].probability;
+                const className = prediction[i].className;
+
+                // Mostrar nombre de la clase y porcentaje
+                labelContainer.childNodes[i].innerHTML = `${className}: ${(prob * 100).toFixed(0)}%`;
+
+                if (prob > highestProbability) {
+                    highestProbability = prob;
+                    bestClass = className.toLowerCase();
+                }
+            }
+
+            // Si está en pausa de 3 segundos, no envía nada a la micro:bit
+            if (isWaiting) return;
+
+            // Umbral de confianza
+            if (highestProbability > 0.75) {
+                // 1. Botellas plástico o Papel -> Cara Feliz
+                if (bestClass.includes("botella") || bestClass.includes("papel")) {
+                    triggerAction("A");
+                } 
+                // 2. Residuo no identificado -> X
+                else if (bestClass.includes("no identificado") || bestClass.includes("no identificable")) {
+                    triggerAction("B");
+                } 
+                // 3. En espera de un residuo -> Apagar pantalla de la micro:bit
+                else if (bestClass.includes("espera")) {
+                    sendToMicrobit("C\n");
+                }
+            }
+        }
+
+        function triggerAction(command) {
+            isWaiting = true;
+            sendToMicrobit(command + "\n");
+
+            // Pausa de 3 segundos antes de limpiar la micro:bit y permitir nueva clasificación
+            setTimeout(() => {
+                sendToMicrobit("C\n");
+                isWaiting = false;
+            }, 3000);
+        }
+
+        async function sendToMicrobit(message) {
+            if (writer) {
+                await writer.write(message);
+            }
+        }
+    </script>
+</body>
+</html>
