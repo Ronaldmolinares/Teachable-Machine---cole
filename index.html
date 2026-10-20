@@ -8,9 +8,13 @@
         body { font-family: Arial, sans-serif; text-align: center; margin-top: 20px; background-color: #f4f4f9; }
         button { padding: 12px 20px; margin: 10px; font-size: 16px; cursor: pointer; border-radius: 5px; border: none; background-color: #007bff; color: white; }
         button:hover { background-color: #0056b3; }
+        .microbit-controls { margin: 15px auto; }
         #webcam-container { margin: 20px auto; }
-        #label-container { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 15px; }
+        .model-result { display: inline-block; vertical-align: top; margin: 10px 20px; }
+        .model-result h3 { margin-bottom: 8px; }
+        .label-container { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 15px; }
         .class-label { font-size: 18px; font-weight: bold; background: #ffffff; padding: 8px 15px; border-radius: 6px; width: 280px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .connection-status { min-height: 24px; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -18,10 +22,22 @@
     <h2>Clasificador de Residuos</h2>
     
     <button type="button" onclick="init()">1. Iniciar Cámara</button>
-    <button type="button" onclick="connectMicrobit()">2. Conectar micro:bit</button>
+    <div class="microbit-controls">
+        <button type="button" onclick="connectMicrobit('bottles')">2. Conectar micro:bit de botellas</button>
+        <button type="button" onclick="connectMicrobit('paper')">3. Conectar micro:bit de papeles</button>
+    </div>
 
     <div id="webcam-container"></div>
-    <div id="label-container"></div>
+    <div class="model-result">
+        <h3>Botellas</h3>
+        <div id="bottles-status" class="connection-status">Micro:bit no conectada</div>
+        <div id="bottles-label-container" class="label-container"></div>
+    </div>
+    <div class="model-result">
+        <h3>Papeles</h3>
+        <div id="paper-status" class="connection-status">Micro:bit no conectada</div>
+        <div id="paper-label-container" class="label-container"></div>
+    </div>
 
     <!-- Librerías de TensorFlow.js -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
@@ -29,58 +45,71 @@
 
     <script type="text/javascript">
         
-        const URL = "https://teachablemachine.withgoogle.com/models/mzzCVcHcD/";
+        const MODELS = {
+            bottles: {
+                name: "botellas",
+                url: "https://teachablemachine.withgoogle.com/models/KmXbz-SIb/"
+            },
+            paper: {
+                name: "papeles",
+                url: "https://teachablemachine.withgoogle.com/models/ydFXgf6yJ/"
+            }
+        };
 
-        let model, webcam, labelContainer, maxPredictions;
-        let port, writer;
-        let isWaiting = false;
+        let models = {};
+        let webcam;
+        const labelContainers = {};
+        const microbits = {
+            bottles: { port: null, writer: null, isWaiting: false, lastState: "" },
+            paper: { port: null, writer: null, isWaiting: false, lastState: "" }
+        };
 
-        async function connectMicrobit() {
+        async function connectMicrobit(modelKey) {
+            const microbit = microbits[modelKey];
             try {
-                port = await navigator.serial.requestPort();
-                await port.open({ baudRate: 115200 });
+                microbit.port = await navigator.serial.requestPort();
+                await microbit.port.open({ baudRate: 115200 });
                 const textEncoder = new TextEncoderStream();
-                const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
-                writer = textEncoder.writable.getWriter();
-                alert("¡micro:bit conectada correctamente!");
+                textEncoder.readable.pipeTo(microbit.port.writable);
+                microbit.writer = textEncoder.writable.getWriter();
+                updateConnectionStatus(modelKey, "Micro:bit conectada");
             } catch (error) {
-                console.error("Error al conectar la micro:bit:", error);
-                alert("No se pudo conectar a la micro:bit.");
+                console.error("Error al conectar la micro:bit de " + MODELS[modelKey].name + ":", error);
+                updateConnectionStatus(modelKey, "No se pudo conectar");
+                alert("No se pudo conectar la micro:bit de " + MODELS[modelKey].name + ".");
             }
         }
 
         async function init() {
-            const modelURL = URL + "model.json";
-            const metadataURL = URL + "metadata.json";
-
             try {
-                // Cargar modelo y metadatos
-                model = await tmImage.load(modelURL, metadataURL);
-                maxPredictions = model.getTotalClasses();
+                // Cargar los dos modelos para poder cambiar de residuo sin reiniciar la cámara.
+                const modelEntries = await Promise.all(
+                    Object.entries(MODELS).map(async ([key, config]) => {
+                        const model = await tmImage.load(
+                            config.url + "model.json",
+                            config.url + "metadata.json"
+                        );
+                        return [key, model];
+                    })
+                );
+                models = Object.fromEntries(modelEntries);
+                console.log("Modelos cargados:", Object.keys(models));
 
-                console.log("Número de clases detectadas en el modelo: " + maxPredictions);
-
-                // Configurar Cámara
                 const flip = true;
-                webcam = new tmImage.Webcam(250, 250, flip);
-                await webcam.setup();
-                await webcam.play();
-                window.requestAnimationFrame(loop);
-
-                // Insertar video en la pantalla
-                document.getElementById("webcam-container").innerHTML = "";
-                document.getElementById("webcam-container").appendChild(webcam.canvas);
-
-                // Crear dinámicamente una casilla para CADA UNA de las clases del modelo
-                labelContainer = document.getElementById("label-container");
-                labelContainer.innerHTML = ""; 
-                for (let i = 0; i < maxPredictions; i++) {
-                    const div = document.createElement("div");
-                    div.className = "class-label";
-                    labelContainer.appendChild(div);
+                if (!webcam) {
+                    webcam = new tmImage.Webcam(250, 250, flip);
+                    await webcam.setup();
+                    await webcam.play();
+                    document.getElementById("webcam-container").appendChild(webcam.canvas);
+                    window.requestAnimationFrame(loop);
                 }
+
+                Object.keys(models).forEach((modelKey) => {
+                    labelContainers[modelKey] = document.getElementById(modelKey + "-label-container");
+                    renderLabels(modelKey);
+                });
             } catch (e) {
-                alert("Error al cargar el modelo. Verifica que la URL contenga el modelo re-exportado.");
+                alert("Error al cargar los modelos. Verifica que las URLs estén disponibles.");
                 console.error(e);
             }
         }
@@ -92,56 +121,63 @@
         }
 
         async function predict() {
-            const prediction = await model.predict(webcam.canvas);
+            await Promise.all(Object.keys(models).map((modelKey) => predictModel(modelKey)));
+        }
+
+        async function predictModel(modelKey) {
+            const prediction = await models[modelKey].predict(webcam.canvas);
+            const microbit = microbits[modelKey];
             let highestProbability = 0;
             let bestClass = "";
 
-            // Actualizar la interfaz en tiempo real para las 4 clases
-            for (let i = 0; i < maxPredictions; i++) {
-                const prob = prediction[i].probability;
-                const className = prediction[i].className;
-
-                // Mostrar nombre de la clase y porcentaje
-                labelContainer.childNodes[i].innerHTML = `${className}: ${(prob * 100).toFixed(0)}%`;
-
-                if (prob > highestProbability) {
-                    highestProbability = prob;
-                    bestClass = className.toLowerCase();
+            prediction.forEach((result, index) => {
+                labelContainers[modelKey].childNodes[index].innerHTML =
+                    `${result.className}: ${(result.probability * 100).toFixed(0)}%`;
+                if (result.probability > highestProbability) {
+                    highestProbability = result.probability;
+                    bestClass = result.className.trim().toLowerCase();
                 }
-            }
+            });
 
-            // Si está en pausa de 3 segundos, no envía nada a la micro:bit
-            if (isWaiting) return;
+            if (microbit.isWaiting || highestProbability <= 0.75 || !microbit.writer) return;
 
-            // Umbral de confianza
-            if (highestProbability > 0.75) {
-                // 1. Botellas plástico o Papel -> Cara Feliz
-                if (bestClass.includes("botella") || bestClass.includes("papel")) {
-                    triggerAction("A");
-                } 
-                // 2. Residuo no identificado -> X
-                else if (bestClass.includes("no identificado") || bestClass.includes("no identificable")) {
-                    triggerAction("B");
-                } 
-                // 3. En espera de un residuo -> Apagar pantalla de la micro:bit
-                else if (bestClass.includes("espera")) {
-                    sendToMicrobit("C\n");
-                }
+            if (bestClass === "residuo correcto") {
+                triggerAction(modelKey, "A");
+            } else if (bestClass === "residuo incorrecto") {
+                triggerAction(modelKey, "B");
+            } else if (bestClass === "en espera de un residuo" && microbit.lastState !== bestClass) {
+                microbit.lastState = bestClass;
+                sendToMicrobit(modelKey, "C\n");
             }
         }
 
-        function triggerAction(command) {
-            isWaiting = true;
-            sendToMicrobit(command + "\n");
+        function renderLabels(modelKey) {
+            labelContainers[modelKey].innerHTML = "";
+            for (let i = 0; i < models[modelKey].getTotalClasses(); i++) {
+                const div = document.createElement("div");
+                div.className = "class-label";
+                labelContainers[modelKey].appendChild(div);
+            }
+        }
 
-            // Pausa de 3 segundos antes de limpiar la micro:bit y permitir nueva clasificación
+        function updateConnectionStatus(modelKey, status) {
+            document.getElementById(modelKey + "-status").textContent = status;
+        }
+
+        function triggerAction(modelKey, command) {
+            const microbit = microbits[modelKey];
+            microbit.isWaiting = true;
+            microbit.lastState = command;
+            sendToMicrobit(modelKey, command + "\n");
+
             setTimeout(() => {
-                sendToMicrobit("C\n");
-                isWaiting = false;
+                sendToMicrobit(modelKey, "C\n");
+                microbit.isWaiting = false;
             }, 3000);
         }
 
-        async function sendToMicrobit(message) {
+        async function sendToMicrobit(modelKey, message) {
+            const writer = microbits[modelKey].writer;
             if (writer) {
                 await writer.write(message);
             }
