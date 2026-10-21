@@ -10,7 +10,8 @@
         button:hover { background-color: #0056b3; }
         .microbit-controls { margin: 15px auto; }
         #webcam-container { margin: 20px auto; }
-        .model-result { display: inline-block; vertical-align: top; margin: 10px 20px; }
+        .model-result { display: none; vertical-align: top; margin: 10px 20px; }
+        .model-result.connected { display: inline-block; }
         .model-result h3 { margin-bottom: 8px; }
         .label-container { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 15px; }
         .class-label { font-size: 18px; font-weight: bold; background: #ffffff; padding: 8px 15px; border-radius: 6px; width: 280px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
@@ -28,14 +29,14 @@
     </div>
 
     <div id="webcam-container"></div>
-    <div class="model-result">
+    <div id="bottles-result" class="model-result">
         <h3>Botellas</h3>
-        <div id="bottles-status" class="connection-status">Micro:bit no conectada</div>
+        <div id="bottles-status" class="connection-status"></div>
         <div id="bottles-label-container" class="label-container"></div>
     </div>
-    <div class="model-result">
+    <div id="paper-result" class="model-result">
         <h3>Papeles</h3>
-        <div id="paper-status" class="connection-status">Micro:bit no conectada</div>
+        <div id="paper-status" class="connection-status"></div>
         <div id="paper-label-container" class="label-container"></div>
     </div>
 
@@ -72,10 +73,11 @@
                 const textEncoder = new TextEncoderStream();
                 textEncoder.readable.pipeTo(microbit.port.writable);
                 microbit.writer = textEncoder.writable.getWriter();
+                setModelVisibility(modelKey, true);
                 updateConnectionStatus(modelKey, "Micro:bit conectada");
             } catch (error) {
                 console.error("Error al conectar la micro:bit de " + MODELS[modelKey].name + ":", error);
-                updateConnectionStatus(modelKey, "No se pudo conectar");
+                setModelVisibility(modelKey, false);
                 alert("No se pudo conectar la micro:bit de " + MODELS[modelKey].name + ".");
             }
         }
@@ -162,6 +164,10 @@
 
         function updateConnectionStatus(modelKey, status) {
             document.getElementById(modelKey + "-status").textContent = status;
+        }
+
+        function setModelVisibility(modelKey, isVisible) {
+            document.getElementById(modelKey + "-result").classList.toggle("connected", isVisible);
         }
 
         function triggerAction(modelKey, command) {
